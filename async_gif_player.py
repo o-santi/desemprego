@@ -5,12 +5,14 @@ import time
 
 import pywintypes
 import win32gui, win32ui, win32api, win32console
+from pynput import keyboard
 
 import asyncio
 import aiofiles
 import argparse
 import mmap
-
+import threading
+import concurrent.futures
 
 class AsyncGifPlayer():
 
@@ -42,88 +44,95 @@ class AsyncGifPlayer():
             win32console.AllocConsole() # and creates a new one
         self.window = win32console.GetConsoleWindow() # gets the new window, just for grabs, not actually being used
         self.console_handle = win32console.CreateConsoleScreenBuffer()        
-        console_info = self.console_handle.GetConsoleScreenBufferInfo()
         """
         @o_santi -> was trying to resize the console with these things but no luck 
                     windows hates me
         
-        largest_x, largest_y = console_info["MaximumWindowSize"].X, console_info["MaximumWindowSize"].Y
-        min_x, min_y = win32api.GetSystemMetrics(28), win32api.GetSystemMetrics(29)
-        if self.width/self.height >=1:
-            new_x, new_y = int(largest_x * self.height/self.width), largest_y
-        else:
-            new_x, new_Y = largest_x, int(largest_y * self.width / self.height)
-        
-        self.console_handle.SetConsoleWindowInfo(False, win32console.PySMALL_RECTType(0, 0, new_x, new_y))
+                self.console_handle.SetConsoleWindowInfo(False, win32console.PySMALL_RECTType(0, 0, new_x, new_y))
         self.console_handle.SetConsoleScreenBufferSize(win32console.PyCOORDType(new_x, new_y))
         time.sleep(10)
-        """
+        console_info = self.console_handle.GetConsoleScreenBufferInfo()
+        largest_x, largest_y = console_info["MaximumWindowSize"].X, console_info["MaximumWindowSize"].Y
+        min_x, min_y = win32api.GetSystemMetrics(28), win32api.GetSystemMetrics(29)
         
-        console_mode = self.console_handle.GetConsoleMode()    
+        if self.width/self.height >=1:
+            new_x, new_y = int(min_y * self.width/self.height), min_y
+        else:
+            new_x, new_y = largest_x, int(largest_x * self.width/self.height)
+        self.console_handle.SetConsoleWindowInfo(True, win32console.PySMALL_RECTType(0, 0, 1, 1))
+        self.console_handle.SetConsoleScreenBufferSize(win32console.PyCOORDType(new_x, new_y))        
+        self.console_handle.SetConsoleWindowInfo(False, win32console.PySMALL_RECTType(0, 0, new_x, new_y))
+        #win32gui.MoveWindow(self.window, 0, 0, self.width, self.height, False)
+        """
+        console_mode = self.console_handle.GetConsoleMode()
+        console_info = self.console_handle.GetConsoleScreenBufferInfo()
         self.console_handle.SetConsoleMode(int(console_mode | 0x004)) # sets the Enable Virtual Terminal Console Mode
         self.frame_size = (console_info["Size"].X, console_info["Size"].Y)
 
         
-    def create_gif_buffer(self):
+    def map_gif_buffer_to_threads(self):
+        frame_data = []
+        assert self.mode in ['color', 'ascii']
+        for frame_index in range(self.frame_count):
+            self.gif.seek(frame_index)
+            if self.mode == "color":
+                frame = self.gif.convert("RGB").resize(self.frame_size) # convert to rgb and resize
+                pixel_array = np.array(frame.getdata()).reshape((*self.frame_size, 3)) # create the numpy array and reshape 
+            elif self.mode == "ascii":
+                frame = self.gif.convert("L").resize((self.frame_size[0], self.frame_size[1]))
+                pixel_array = np.array(frame.getdata()).reshape((self.frame_size[1], self.frame_size[0], 1))
+            frame_data.append(pixel_array)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            results = list(tqdm(executor.map(self.create_gif_buffer, range(len(frame_data)),frame_data), total=self.frame_count))
+        self.screen_array = results
+        
+        
+    def create_gif_buffer(self, frame_index, pixel_array):
         """
         creates the array that hold the actual pixel values (the colors of the chars)
         
         TODO: implement async version, where each frame is run by a single await create_frame and then
         used to create the buffer, it'll run A LOT faster
         """
+        screen_array = ""
+        if self.mode == "color":
+            last_pixel = 0,0,0
         
-        assert self.mode in ["color", "ascii"] # make sure that the mode is correct
+        descriptor = len(f"{self.filename} -- 000 -- fps: 000") # descriptor of the gif
         
-        for frame_index in tqdm(range(self.frame_count)): # iterate through the frames in the gif
-            
-            self.gif.seek(frame_index) 
-            
-            if self.mode == "color":
-                frame = self.gif.convert("RGB").resize((self.frame_size[0], self.frame_size[1])) # convert to rgb and resize
-                pixel_array = np.array(frame.getdata()).reshape((self.frame_size[0], self.frame_size[1], 3)) # create the numpy array and reshape 
-                self.screen_array.append("") # start the string that will hold the actual ansi-codes
-                last_pixel = 0, 0, 0 # hold the last pixel value so that it can be compared (for optimization purposes)
+        for line_index, line in enumerate(pixel_array):
+            if line_index == 0:
+                # write descriptor at first line
+                screen_array += f"\033[7m{self.filename} -- {frame_index:03d} -- fps: 000\033[0m"
+                line = line[descriptor:]
                 
-            elif self.mode == "ascii":
-                frame = self.gif.convert("L").resize((self.frame_size[0], self.frame_size[1]))
-                pixel_array = np.array(frame.getdata()).reshape((self.frame_size[1], self.frame_size[0], 1))
-                self.screen_array.append("")
-                
-            descriptor = len(f"{self.filename} -- 000 -- fps: 000") # descriptor of the gif
+            for pixel in line:
+                if self.mode == "color":
+                    
+                    r, g, b = pixel
+                    r_index = int(6 * r / 256)
+                    g_index = int(6 * g / 256)
+                    b_index = int(6 * b / 256)
+                    number_code = 16 + (r_index * 36 + g_index * 6 + b_index)
+                    
+                    """
+                    uses ansi 6 bit color codes (so 216 coloring)
+                    could try to use 256 bit ansi coloring, but the player runs smoother this way
+                    >>> and it is more aesthetic (in my opinion) <<<
+                    """
+                    
+                    if np.any(last_pixel != number_code):
+                        pixel_string = f"\033[48;5;{number_code}m" # color the background with the coloring
+                        screen_array += pixel_string
+                        last_pixel = number_code
+                    screen_array += self.char
+                    
+                elif self.mode == "ascii":
+                    char = self.char_array[ int(len(self.char_array) * pixel/256) ]
+                    screen_array += char
+        screen_array += "\033[H"
+        return screen_array
 
-            for line_index, line in enumerate(pixel_array):
-                if line_index == 0:
-                    # write descriptor at first line
-                    self.screen_array[frame_index] += f"\033[7m{self.filename} -- {frame_index:03d} -- fps: 000\033[0m"
-                    line = line[descriptor:]
-
-                for pixel in line:
-                    if self.mode == "color":
-                        
-                        r, g, b = pixel
-                        r_index = int(6 * r / 256)
-                        g_index = int(6 * g / 256)
-                        b_index = int(6 * b / 256)
-                        number_code = 16 + (r_index * 36 + g_index * 6 + b_index)
-                        
-                        """
-                        uses ansi 6 bit color codes (so 216 coloring)
-                        could try to use 256 bit ansi coloring, but the player runs smoother this way
-                        >>> and it is more aesthetic (in my opinion) <<<
-                        """
-                        
-                        if np.any(last_pixel != number_code):
-                            pixel_string = f"\033[48;5;{number_code}m" # color the background with the coloring
-                            self.screen_array[frame_index] += pixel_string
-                            last_pixel = number_code
-                        self.screen_array[frame_index] += self.char
-                            
-                    elif self.mode == "ascii":
-                        char = self.char_array[ int(len(self.char_array) * pixel/256) ]
-                        self.screen_array[frame_index] += char
-            self.screen_array[frame_index] += "\033[H"
-
-            
     def create_frame_bytes(self):
         """
         uses mmaps to read/write faster
@@ -141,33 +150,36 @@ class AsyncGifPlayer():
             
 
     async def draw_gif(self):
-        try:
-            self.create_terminal_window() 
-            self.create_gif_buffer()
-            self.create_frame_bytes()
-            self.console_handle.SetConsoleActiveScreenBuffer()
-            async with aiofiles.open("CONOUT$", "wb") as file_object:
-                index = 0
-                descriptor = len(f"{self.filename} -- 000 -- fps: 000") + 1
-                # for some reason, the actual file-position is one char further than the actual len
-                # maybe because of all the ansi-code that is being written, honestly idk
-                while True:
-                    t1 = time.perf_counter_ns()
-                    frame_mmap = self.frames_bytes[index] # get current frame
-                    frame_mmap.seek(0) # seek to the start of the frame
-                    await file_object.write(frame_mmap.read()) # print
-                    index += 1 
-                    index %= self.frame_count # loop it
-                    if (delta := (time.perf_counter_ns() - t1)/10**9) < self.duration  :
-                        await asyncio.sleep(self.duration - delta) # make sure that it only sleeps when it actually is printing faster than it should
-                        # >>>perf_counter_ns is post python 3.7<<<
-                    fps = f'{int(10**9/((time.perf_counter_ns() - t1))):03d}'
-                    self.frames_bytes[index][descriptor:descriptor + 3] = bytes(fps, encoding='utf-8') # write fps to position
-                    
-        except KeyboardInterrupt: # stop by crtl-c'ing
-            # i know this is not good practice,
-            # will change later
-            # TODO: fix this shit
+
+        def on_key_press_stop(key):
+            if key == keyboard.Key.esc:
+                self.is_playing = False
+                listener.stop()
+            
+        self.create_terminal_window() 
+        self.map_gif_buffer_to_threads()
+        self.create_frame_bytes()
+        self.console_handle.SetConsoleActiveScreenBuffer()    
+        async with aiofiles.open("CONOUT$", "wb") as file_object:
+            index = 0
+            descriptor = len(f"{self.filename} -- 000 -- fps: 000") + 1
+            # for some reason, the actual file-position is one char further than the actual len
+            # maybe because of all the ansi-code that is being written, honestly idk
+            listener = keyboard.Listener(on_press=on_key_press_stop)
+            listener.start()
+            self.is_playing = True
+            while self.is_playing:
+                t1 = time.perf_counter_ns()
+                frame_mmap = self.frames_bytes[index] # get current frame
+                frame_mmap.seek(0) # seek to the start of the frame
+                await file_object.write(frame_mmap.read()) # print
+                index += 1 
+                index %= self.frame_count # loop it
+                if (delta := (time.perf_counter_ns() - t1)/10**9) < self.duration  :
+                    await asyncio.sleep(self.duration - delta) # make sure that it only sleeps when it actually is printing faster than it should
+                # >>>perf_counter_ns is post python 3.7<<<
+                fps = f'{int(10**9/((time.perf_counter_ns() - t1))):03d}'
+                self.frames_bytes[index][descriptor:descriptor + 3] = bytes(fps, encoding='utf-8') # write fps to position        
             self.console_handle.Close()
             [mmap_obj.close() for mmap_obj in self.frames_bytes]
             print("Terminado com sucesso")
