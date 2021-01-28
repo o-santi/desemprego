@@ -14,22 +14,89 @@ import mmap
 import threading
 import concurrent.futures
 
+import cv2
+import filetype
+
+
 class AsyncGifPlayer():
 
     def __init__(self,filename, mode, char, console):
-        self.gif = Image.open(filename) #open on RGBA
-        self.frame_count = self.gif.n_frames
         self.filename = filename
+        self.filetype = filetype.guess(self.filename)
         self.console = console # if True opens a new console to show the gif 
-        self.width = self.gif.width
-        self.height = self.gif.height
-        self.char_array = [" ", ".", "-", "*", "/", "=", "#","░", "▒", "▓"]
-        self.screen_array = [] # dimensions are width by height so width * height elements      
+        self.char_array = [" ", ".", "-", "*", "/", "=", "#", "░", "▒", "▓"]
         self.char = char
-        self.duration = self.gif.info.get("duration", 43) / 1000
+        self.supported_filetypes = ['gif', 'mp4']
+        self.modes = ['ascii', 'color']
+        assert mode in self.modes
         self.mode = mode # either ascii-characters or colored
+        self.image_frames_array = []
+        self.screen_array = [] # dimensions are width by height so width * height elements      
         
         
+    def handle_file_types(self):
+        '''
+        tries to handle multiple filetypes
+        sets the following aspect for the self object:
+        
+        image_frames_array -> holds the arrays of the pixel values
+                              each frame is a numpy array
+        frame_count -> number of frames in video
+        filetype -> filetype
+        width 
+        height
+        duration -> time to sleep between frames
+        TODO: play sound lol
+        '''
+        if self.filetype.extension not in self.supported_filetypes:
+            raise TypeError
+        if self.filetype.extension == 'gif':
+            gif_object = Image.open(self.filename)
+            self.width = gif_object.width
+            self.height = gif_object.height
+            self.frame_count = gif_object.n_frames
+            self.duration = gif_object.info.get("duration", 41.6) / 1000 # default to 24fps
+            self.sound = False
+            
+            for frame in range(gif_object.n_frames):
+                gif_object.seek(frame)
+                if self.mode == 'ascii':
+                    frame = gif_object.convert("L").resize(self.frame_size).getdata()
+                    frame = np.reshape(frame, (*self.frame_size, 1))
+                elif self.mode == 'color':
+                    frame = gif_object.convert("RGB").resize(self.frame_size).getdata()
+                    frame = np.reshape(frame, (*self.frame_size, 3))
+                self.image_frames_array.append(frame)
+
+        elif self.filetype.extension == 'mp4':
+            """
+            this probably can read a lot of extensions because of opencv
+            but i can't know for sure because it is fourcc-dependent,
+            the best way would be to try to open the format and see if it actually worked
+
+            TODO: change this shit to more than just mp4
+            """
+            cap = cv2.VideoCapture(self.filename)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            self.duration = 1/fps
+            self.width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            self.height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            self.frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            while(cap.isOpened()):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frame = cv2.resize(frame, self.frame_size)
+                if self.mode == 'ascii':
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    frame = np.reshape(frame, (*self.frame_size, 1))
+                elif self.mode == 'color':
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frame = np.reshape(frame, (*self.frame_size, 3))
+                self.image_frames_array.append(frame)
+            cap.release()
+
+            
     def create_terminal_window(self):
         """
         creates the console screen buffer that can be printed to
@@ -69,30 +136,21 @@ class AsyncGifPlayer():
         self.console_handle.SetConsoleMode(int(console_mode | 0x004)) # sets the Enable Virtual Terminal Console Mode
         self.frame_size = (console_info["Size"].X, console_info["Size"].Y)
 
-        
-    def map_gif_buffer_to_threads(self):
-        frame_data = []
-        assert self.mode in ['color', 'ascii']
-        for frame_index in range(self.frame_count):
-            self.gif.seek(frame_index)
-            if self.mode == "color":
-                frame = self.gif.convert("RGB").resize(self.frame_size) # convert to rgb and resize
-                pixel_array = np.array(frame.getdata()).reshape((*self.frame_size, 3)) # create the numpy array and reshape 
-            elif self.mode == "ascii":
-                frame = self.gif.convert("L").resize((self.frame_size[0], self.frame_size[1]))
-                pixel_array = np.array(frame.getdata()).reshape((self.frame_size[1], self.frame_size[0], 1))
-            frame_data.append(pixel_array)
+    
+    def map_video_buffer_to_threads(self):
+        """
+        maps the video frames to the processing threads, to generate the frames 
+        """
         with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-            results = list(tqdm(executor.map(self.create_gif_buffer, range(len(frame_data)),frame_data), total=self.frame_count))
-        self.screen_array = results
-        
-        
+            self.screen_array = list(tqdm(executor.map(self.create_gif_buffer,
+                                             range(self.frame_count),
+                                             self.image_frames_array), total=self.frame_count))
+       
     def create_gif_buffer(self, frame_index, pixel_array):
         """
         creates the array that hold the actual pixel values (the colors of the chars)
-        
-        TODO: implement async version, where each frame is run by a single await create_frame and then
-        used to create the buffer, it'll run A LOT faster
+        this function only need the pixel_data, so that it is not dependent to any format
+        as long as it is properly formatted (correct width and height) it will work
         """
         screen_array = ""
         if self.mode == "color":
@@ -128,11 +186,13 @@ class AsyncGifPlayer():
                     screen_array += self.char
                     
                 elif self.mode == "ascii":
-                    char = self.char_array[ int(len(self.char_array) * pixel/256) ]
+                    pixel = pixel[0]
+                    char = self.char_array[int(len(self.char_array) * pixel/256)]
                     screen_array += char
         screen_array += "\033[H"
         return screen_array
 
+    
     def create_frame_bytes(self):
         """
         uses mmaps to read/write faster
@@ -150,14 +210,15 @@ class AsyncGifPlayer():
             
 
     async def draw_gif(self):
-
+    
         def on_key_press_stop(key):
             if key == keyboard.Key.esc:
                 self.is_playing = False
                 listener.stop()
-            
-        self.create_terminal_window() 
-        self.map_gif_buffer_to_threads()
+                
+        self.create_terminal_window()
+        self.handle_file_types()
+        self.map_video_buffer_to_threads()
         self.create_frame_bytes()
         self.console_handle.SetConsoleActiveScreenBuffer()    
         async with aiofiles.open("CONOUT$", "wb") as file_object:
@@ -180,29 +241,38 @@ class AsyncGifPlayer():
                 # >>>perf_counter_ns is post python 3.7<<<
                 fps = f'{int(10**9/((time.perf_counter_ns() - t1))):03d}'
                 self.frames_bytes[index][descriptor:descriptor + 3] = bytes(fps, encoding='utf-8') # write fps to position        
-            self.console_handle.Close()
-            [mmap_obj.close() for mmap_obj in self.frames_bytes]
-            print("Terminado com sucesso")
 
-
+    def close(self):
+        """
+        stops everything that needs stopin'
+        and closes everything that needs closin'
+        """
+        [mmap_obj.close() for mmap_obj in self.frames_bytes]
+        self.console_handle.Close()
+        print("Terminado com sucesso")
+        
+    
     def play(self):
         """
         runs the main loop to draw the gif and show it in the console
+        pretty simple
+        no biggies
         """
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(self.draw_gif())
-        loop.close
-
-
-
+        try:
+            asyncio.run(self.draw_gif())
+        except KeyboardInterrupt:
+            print('Interrupted by user. The intended way of closing is with the ESC key')
+        finally:
+            self.close()
+    
         
 def main():
-    parser = argparse.ArgumentParser(description = "plays cool gifs on the terminal",
-                                     epilog= "created by @o_santi, follow me on twitter @o_santi_")
-    parser.add_argument('-c','-C' ,'--console' ,help='whether or not a new console is created to show the gif',
+    parser = argparse.ArgumentParser(description = "plays cool videos on the terminal",
+                                     epilog= "written by @o_santi, follow me on twitter @o_santi_")
+    parser.add_argument('-c','-C' ,'--console' , help='whether or not a new console is created to show the gif',
                         action='store_true')
-    parser.add_argument('filename', help='filename to be shown')
-    parser.add_argument('mode', help='color for colors or ascii for black and white text')
+    parser.add_argument('filename', help='filename to the video to be shown')
+    parser.add_argument('mode', help='\'color\' for colors or \'ascii\' for black and white text')
     parser.add_argument('--char', help="char to print when in colored mode",
                         default=' ')
 
