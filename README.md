@@ -1,5 +1,5 @@
 # desemprego
-Não leve nada que está aqui a sério, eu sou burro
+Coisas que eu escrevo no meu tempo livre. Não leve nada que está aqui a sério, eu sou burro.
 
 # async_gif_player.py
 Inicialmente era pra ser um gif player bosta mas agora também roda mp4, e possivelmente outros formatos, dependendo somente do opencv-python. 
@@ -38,15 +38,13 @@ O programa que eu fiz que me levou para o caminho obscuro da programação inuti
 
 Feito pra desenhar a imagem fornecida em _ascii art_, mas logo em sequência já deixou de ser apenas ascii art e passou a ter a imagem em ansi-color-code.
 
-Eventualmente este daqui será inutil, porque eu pretendo adicionar essa funcionalidade no **async_gif_player** ao tentar abrir uma imagem.
+Eventualmente este daqui será inutil, porque eu pretendo adicionar essa funcionalidade no **async_gif_player** ao tentar abrir uma imagem estática.
 
 É uma bosta.
-
-Não use.
 
 
 # letras_dancantes.py
 
 É uma bosta.
 
-Não use.
+Nem pense.
