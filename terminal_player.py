@@ -1,6 +1,6 @@
 """
 Really bad video player made to play on the terminal.
-Can also print images if passed.
+Can also print images.
 
 """
 
@@ -24,7 +24,7 @@ import filetype
 import sys
 
 
-class AsyncVideoPlayer:
+class TerminalPlayer:
     def __init__(self, filename, mode, char, console, fps_cap):
         self.filename = filename
         self.filetype = filetype.guess(self.filename)
@@ -65,11 +65,7 @@ class AsyncVideoPlayer:
 
     def open_opencv_image(self, cap):
         """
-        this probably can read a lot of extensions because of opencv
-        but i can't know for sure because it is fourcc-dependent,
-        the best way would be to try to open the format and see if it actually worked
-
-        TODO: change this shit to more than just mp4
+        Opens the video using opencv-python
         """
         fps = cap.get(cv2.CAP_PROP_FPS)
         self.duration = 1 / fps
@@ -93,7 +89,7 @@ class AsyncVideoPlayer:
 
     def handle_file_types(self):
         """
-        tries to handle multiple filetype
+        handles multiple filetype
         sets the following aspect for the self object:
 
         image_frames_array -> holds the arrays of the pixel values
@@ -106,14 +102,14 @@ class AsyncVideoPlayer:
         TODO: play sound lol
         """
         try:
-            self.open_pillow_image(Image.open(self.filename))
+            self.open_pillow_image(Image.open(self.filename)) # tries to open with pillow
         except UnidentifiedImageError:
-            cap = cv2.VideoCapture(self.filename)
+            cap = cv2.VideoCapture(self.filename) # if didnt open, try it with cv2
             if cap.isOpened():
                 self.open_opencv_image(cap)
             else:
                 print("Sua imagem/video não pôde ser aberta.")
-                raise TypeError
+                raise TypeError # TODO: create error type, this is just a place-holder
 
     def create_terminal_window(self):
         """
@@ -123,27 +119,6 @@ class AsyncVideoPlayer:
         arbitrary size, so all the gifs will be stretched to this ratio for now
 
         TODO: change the fucking window size
-        """
-
-        """
-        @o_santi -> was trying to resize the console with these things but no luck 
-                    windows hates me
-        
-                self.console_handle.SetConsoleWindowInfo(False, win32console.PySMALL_RECTType(0, 0, new_x, new_y))
-        self.console_handle.SetConsoleScreenBufferSize(win32console.PyCOORDType(new_x, new_y))
-        time.sleep(10)
-        console_info = self.console_handle.GetConsoleScreenBufferInfo()
-        largest_x, largest_y = console_info["MaximumWindowSize"].X, console_info["MaximumWindowSize"].Y
-        min_x, min_y = win32api.GetSystemMetrics(28), win32api.GetSystemMetrics(29)
-        
-        if self.width/self.height >=1:
-            new_x, new_y = int(min_y * self.width/self.height), min_y
-        else:
-            new_x, new_y = largest_x, int(largest_x * self.width/self.height)
-        self.console_handle.SetConsoleWindowInfo(True, win32console.PySMALL_RECTType(0, 0, 1, 1))
-        self.console_handle.SetConsoleScreenBufferSize(win32console.PyCOORDType(new_x, new_y))        
-        self.console_handle.SetConsoleWindowInfo(False, win32console.PySMALL_RECTType(0, 0, new_x, new_y))
-        #win32gui.MoveWindow(self.window, 0, 0, self.width, self.height, False)
         """
         if sys.platform == "win32":
             import pywintypes
@@ -243,7 +218,7 @@ class AsyncVideoPlayer:
         """
         uses mmaps to read/write faster
         @o_santi -> actually i wanted to create a virtual memory mapping of the stdout, so that the maximum read/write speed could be reached
-        but i think this would put me in the gray area of the programmers because it seems like a crime
+        but i think this would put me in the gray area of the programmers because it seems like a really shitty idea 
         either way, I will find a way to do this >:(
         """
         self.frames_bytes = []
@@ -303,11 +278,9 @@ class AsyncVideoPlayer:
                     frame_index += 1
                     frame_index %= self.frame_count
             else:
-                await self.blit_screen(
-                    0
-                )  # print the first frame so that still images can also be shown
+                await self.blit_screen(0)  # print the first frame so that still images can also be shown
                 with keyboard.Listener(on_press=on_key_press_stop) as listener:
-                    listener.join()
+                    listener.join() # waits for the key to be pressed so that you can see the image
 
     async def draw_to_screen_main(self):
         self.create_terminal_window()
@@ -317,6 +290,7 @@ class AsyncVideoPlayer:
         self.console_handle.SetConsoleActiveScreenBuffer()
         await self.play_animated()
 
+        
     def close(self):
         """
         stops everything that needs stopin'
@@ -326,6 +300,7 @@ class AsyncVideoPlayer:
         self.console_handle.Close()
         print("Terminado com sucesso")
 
+        
     def play(self):
         """
         runs the main loop to draw the gif and show it in the console
@@ -373,8 +348,8 @@ def main():
 
     args = parser.parse_args()
     if args.filename:
-        player = AsyncVideoPlayer(args.filename, args.mode, args.char, args.console, args.fps_cap)
-        player.play()
+        terminal_player = TerminalPlayer(args.filename, args.mode, args.char, args.console, args.fps_cap)
+        terminal_player.play()
 
 
 if __name__ == "__main__":
