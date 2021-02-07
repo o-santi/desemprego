@@ -1,22 +1,24 @@
 # desemprego
 Coisas que eu escrevo no meu tempo livre. Não leve nada que está aqui a sério, eu sou burro.
 
-## async_gif_player.py
-Inicialmente era pra ser um gif player bosta mas agora também roda mp4, e possivelmente outros formatos, dependendo somente do opencv-python. 
+## terminal_player.py
+Agora um full-fledged terminal media player, suporta todos os tipos de imagens (animadas ou não) e videos que o Pillow e opencv-python suportam.
 
-Algum dia também terá suporte pra audio, só depende de quando eu descobrir pra qual file eu tenho que dar o open("soundfile") pra escrever diretamente.
-
-~~Sim eu sou retardado mental~~
+Ainda sem suporte pra audio, só depende de quando eu descobrir pra qual file eu tenho que dar o open("soundfile") pra escrever diretamente.
 
 pra usar só fazer
 ```python
-player = AsyncGifPlayer(filename, mode, char, console)
+player = TerminalPlayer(filename, mode, char, console)
 player.play()
 ```
 - `filename` é o path para o arquivo a ser mostrado (atualmente .gif e .mp4)
-- `mode` é o modo que a imagem será mostrada: `ascii` para mostrar em texto (bem smooth, mas apenas grayscale) e `color` para mostrar em cores (216 color ansi encoding)
-- `char` o character a ser usado como pixel (só usado no modo `color`, default é o character espaço)
-- `console` booleana para caso um novo console deve ser aberto ou se deve ser mostrado no mesmo terminal
+- `mode` é o modo que a imagem será mostrada: 
+   * `ascii` para mostrar em texto (bem smooth, mas apenas grayscale) 
+   * `color` para mostrar em 24-bit coloring (funciona melhor com imagens) 
+   * `color216` para mostrar em 6-bit coloring (funciona melhor com videos, smoother)
+- `char` o character a ser usado como pixel (só usado no modo `color`, default é o character espaço); `default = True`
+- `console` booleana para caso um novo console deve ser aberto ou se deve ser mostrado no mesmo terminal; `default = False`
+- `fps-cap` booleana para caso o fps padrão deve ser respeitado, caso `False` irá reproduzir o mais rápido que conseguir; `default = True`
 
 Também pode ser utilizado no comandline simplesmente com
 ```
